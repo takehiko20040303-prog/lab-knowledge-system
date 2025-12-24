@@ -1,0 +1,11 @@
+rules_version = '2';
+
+// Firebase Storage Security Rules
+service firebase.storage {
+  match /b/{bucket}/o {
+    // 一時的に全てのファイルへのアクセスを許可（テスト用）
+    match /{allPaths=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}
