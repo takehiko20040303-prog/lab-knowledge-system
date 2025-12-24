@@ -1,0 +1,131 @@
+========================================
+研究室ノウハウ蓄積システム
+デプロイ手順（簡単版）
+========================================
+
+完成したアプリを公開する手順です！
+
+========================================
+ステップ1: GitHubにアップロード
+========================================
+
+1. GitHub.comにアクセス
+   → https://github.com/new
+
+2. リポジトリ作成
+   - Repository name: lab-knowledge-system
+   - Public を選択
+   - 「Create repository」をクリック
+
+3. ターミナルで実行（YOUR_USERNAMEを自分のユーザー名に変更）
+
+cd /Users/makiyamahiroshishirou/Desktop/lab-knowledge-system
+git remote add origin https://github.com/YOUR_USERNAME/lab-knowledge-system.git
+git push -u origin main
+
+========================================
+ステップ2: Vercelでデプロイ
+========================================
+
+1. Vercel.comにアクセス
+   → https://vercel.com
+
+2. 「Sign Up」→ GitHubアカウントで登録
+
+3. 「Add New...」→「Project」
+
+4. GitHubリポジトリ「lab-knowledge-system」を選択
+
+5. 環境変数を設定
+   「Environment Variables」タブで以下を追加：
+
+   名前: NEXT_PUBLIC_FIREBASE_API_KEY
+   値: （.env.localファイルから確認）
+
+   名前: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+   値: （.env.localファイルから確認）
+
+   名前: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+   値: （.env.localファイルから確認）
+
+   名前: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+   値: （.env.localファイルから確認）
+
+   名前: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+   値: （.env.localファイルから確認）
+
+   名前: NEXT_PUBLIC_FIREBASE_APP_ID
+   値: （.env.localファイルから確認）
+
+   名前: GEMINI_API_KEY
+   値: （.env.localファイルから確認）
+
+6. 「Deploy」をクリック
+
+7. 完了！
+   → https://lab-knowledge-system.vercel.app のようなURLが発行されます
+
+========================================
+ステップ3: Firebaseの設定
+========================================
+
+1. Firebaseコンソールにアクセス
+   → https://console.firebase.google.com/
+
+2. あなたのプロジェクトを選択
+
+3. Authentication → Settings → Authorized domains
+
+4. 「Add domain」をクリック
+
+5. VercelのURLを追加
+   例: lab-knowledge-system.vercel.app
+
+========================================
+完了！🎉
+========================================
+
+発行されたURLを研究室メンバーに共有してください！
+
+例: https://lab-knowledge-system.vercel.app
+
+========================================
+スマホでアプリのように使う方法
+========================================
+
+【iPhone】
+1. SafariでURLを開く
+2. 共有ボタン → 「ホーム画面に追加」
+
+【Android】
+1. ChromeでURLを開く
+2. メニュー → 「ホーム画面に追加」
+
+========================================
+今後の更新方法
+========================================
+
+コードを変更したら：
+
+1. git add .
+2. git commit -m "変更内容"
+3. git push
+
+→ Vercelが自動的に再デプロイします！
+
+========================================
+トラブルシューティング
+========================================
+
+【ログインできない】
+→ Firebaseの承認済みドメインを確認
+
+【ビルドエラー】
+→ 環境変数が正しく設定されているか確認
+
+【詳細なガイド】
+→ QUICK_START.md または DEPLOYMENT_GUIDE.md を参照
+
+========================================
+コスト: 完全無料 $0/月 🎉
+========================================
