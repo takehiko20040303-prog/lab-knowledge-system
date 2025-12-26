@@ -1,0 +1,2579 @@
+========================================
+研究室ノウハウ蓄積システム - コード全体
+========================================
+
+【プロジェクト概要】
+- Next.js 16 (App Router) + TypeScript
+- Firebase (Auth, Firestore)
+- Gemini 2.5 Flash API
+- 完全無料で運用可能
+
+【主な機能】
+1. AI議事録自動整理（Gemini API）
+2. ファイルアップロード（Base64、500KB制限）
+3. 年度別フィルター・検索
+4. 削除機能
+5. PWA対応
+
+========================================
+
+========================================
+主要ファイル構成
+========================================
+./types/index 2.ts
+./types/index.ts
+./app/archives/page.tsx
+./app/minutes/new/page 2.tsx
+./app/minutes/new/page.tsx
+./app/minutes/[id]/page.tsx
+./app/minutes/page.tsx
+./app/layout 2.tsx
+./app/dashboard/page.tsx
+./app/layout.tsx
+./app/api/ai/list-models/route.ts
+./app/api/ai/process/route.ts
+./app/page.tsx
+./app/upload/page.tsx
+./components/auth/LoginButton.tsx
+./components/auth/AuthProvider 2.tsx
+./components/auth/AuthProvider.tsx
+./components/files/FileUploader.tsx
+./components/files/VideoPlayer.tsx
+./lib/firebase.ts
+
+========================================
+1. package.json - 依存関係
+========================================
+{
+  "name": "lab-knowledge-system",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "NODE_OPTIONS='--max-old-space-size=4096' next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "firebase": "^12.7.0",
+    "next": "16.1.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-firebase-hooks": "^5.1.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.1",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
+
+========================================
+2. 型定義 - types/index.ts
+========================================
+
+// 型定義ファイル
+
+import { Timestamp } from 'firebase/firestore';
+
+// ユーザー型
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  createdAt: Timestamp;
+}
+
+// 添付ファイル型
+export interface AttachedFile {
+  id: string;
+  fileName: string;
+  fileType: string; // 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'txt' | 'image'
+  fileSize: number; // bytes
+  fileUrl: string; // Firebase Storage URL
+  storagePath: string; // Storage内のパス
+  uploadedBy: string; // userId
+  uploadedAt: Timestamp;
+  description?: string | null; // ファイルの説明
+}
+
+// ToDo項目の詳細型
+export interface TodoItem {
+  no: number;
+  task: string; // やること
+  assignee: string; // 誰が
+  when: string; // いつやる（今日/明日/○曜）
+  deadline: string; // 期限（○/○）
+  goal: string; // ゴール（どこまで終わればOK？）
+}
+
+// 週間スケジュール型
+export interface WeeklySchedule {
+  monday?: string;
+  tuesday?: string;
+  wednesday?: string;
+  thursday?: string;
+  friday?: string;
+  weekend?: string;
+}
+
+// マイルストーン項目型
+export interface MilestoneItem {
+  label: string;
+  completed: boolean;
+  progress?: number; // 進捗率（0-100）
+}
+
+// 議事録型（研究室用）
+export interface Minute {
+  id: string;
+  userId: string;
+  inputMode: 'manual'; // 手入力のみ
+
+  // 基本情報
+  date: string; // YYYY-MM-DD形式
+  participants: string[]; // 参加者
+
+  // 発表までの日数
+  midtermDate?: string; // 中間発表日（YYYY-MM-DD）
+  finalDate?: string; // 最終発表日（YYYY-MM-DD）
+  daysToMidterm?: number; // 中間発表まであと何日
+  daysToFinal?: number; // 最終発表まであと何日
+  meetingsToMidterm?: number; // 中間発表まであと何回MTG
+  meetingsToFinal?: number; // 最終発表まであと何回MTG
+
+  // 今日のゴール
+  todayGoal: string; // 1行
+
+  // Check（先週やったこと）
+  lastWeekActions: string[]; // 最大3つ
+
+  // Problem（困ってること）
+  problems: string; // 自由記述
+
+  // Plan（次回までの予定）
+  todos: TodoItem[]; // 詳細ToDoリスト
+  weeklySchedule?: WeeklySchedule; // 今週のスケジュール
+
+  // Do（次回持っていくもの）
+  nextDeliverables: {
+    figures?: number; // 図
+    tables?: number; // 表
+    slides?: number; // スライド
+    words?: number; // 文章（字数）
+  };
+
+  // Decision（決まったこと）
+  decisions: string[]; // 箇条書き
+
+  // 次回
+  nextMeetingDate?: string; // YYYY-MM-DD HH:MM
+  nextMeetingGoal: string; // 次回のゴール
+
+  // マイルストーン
+  midtermMilestones: MilestoneItem[]; // 中間発表までの階段
+  finalMilestones: MilestoneItem[]; // 最終発表までの階段
+
+  // 添付ファイル
+  attachedFiles?: AttachedFile[]; // 関連ファイル（Word/PDF/Excel等）
+
+  // メタ情報
+  tags: string[];
+  status: 'draft' | 'confirmed';
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+// 編集履歴型
+export interface EditHistory {
+  id: string;
+  minuteId: string;
+  userId: string;
+  fieldName: string;
+  oldValue: string;
+  newValue: string;
+  editedAt: Timestamp;
+}
+
+// 議事録作成フォーム用の型
+export interface MinuteFormData {
+  inputText: string; // 手入力テキスト（AI処理前）
+  date: string;
+  participants: string[];
+  midtermDate?: string;
+  finalDate?: string;
+  todayGoal: string;
+  lastWeekActions: string[];
+  problems: string;
+  todos: TodoItem[];
+  weeklySchedule?: WeeklySchedule;
+  nextDeliverables: {
+    figures?: number;
+    tables?: number;
+    slides?: number;
+    words?: number;
+  };
+  decisions: string[];
+  nextMeetingDate?: string;
+  nextMeetingGoal: string;
+  midtermMilestones: MilestoneItem[];
+  finalMilestones: MilestoneItem[];
+  tags: string[];
+}
+
+// AI整理結果の型（研究室用）
+export interface AIProcessedMinute {
+  date: string;
+  participants: string[];
+  todayGoal: string;
+  lastWeekActions: string[]; // 最大3つ
+  problems: string;
+  todos: TodoItem[];
+  decisions: string[];
+  nextMeetingGoal: string;
+}
+
+========================================
+3. Firebase設定 - lib/firebase.ts
+========================================
+
+import { initializeApp, getApps } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import { getFirestore } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
+
+const firebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+};
+
+// Initialize Firebase
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
+
+// Firebase services
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+export const storage = getStorage(app);
+
+========================================
+4. Gemini API - lib/gemini.ts
+========================================
+
+// Gemini API連携ユーティリティ（REST API直接呼び出し）
+import { AIProcessedMinute } from '@/types';
+
+export async function processMinuteWithAI(inputText: string): Promise<AIProcessedMinute> {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error('GEMINI_API_KEY is not set');
+  }
+
+  const prompt = `
+あなたは研究室のミーティング議事録を整理するAIアシスタントです。
+以下の自由記述テキストから、研究室議事録として必要な情報を抽出し、JSON形式で出力してください。
+必ず有効なJSON形式で返してください。
+
+【抽出項目】
+1. date: 議事録の日付（YYYY-MM-DD形式、テキスト中になければ今日の日付）
+2. participants: 参加者の名前（配列形式、例: ["山田", "佐藤", "田中"]）
+3. todayGoal: 今日のゴール（1行、30文字以内）
+4. lastWeekActions: 先週やったこと・結果（配列形式、最大3つ、各50文字以内）
+5. problems: 困っていること・詰まっていること（100文字以内、なければ空文字）
+6. todos: 次回までのToDoリスト（配列形式、各項目は以下の形式のオブジェクト）
+   - no: 番号（1から順番）
+   - task: やること（成果物で記述、例: "箱ひげ図1枚＋結論1行"）
+   - assignee: 誰が（名前）
+   - when: いつやる（例: "今日", "明日", "水曜"）
+   - deadline: 期限（例: "12/25", "金曜18:00"）
+   - goal: ゴール（どこまで終わればOK？）
+7. decisions: 決まったこと（配列形式、各30文字以内）
+8. nextMeetingGoal: 次回のゴール（1行、30文字以内）
+
+【重要な指示】
+- ToDoは必ず「成果物」で記述すること（×「解析する」→ ○「箱ひげ図1枚＋結論1行」）
+- 期限は具体的な日付または曜日まで落とすこと（×「今週中」→ ○「金曜18:00」）
+- 情報が不足している場合は、合理的に推測して埋めること
+
+--- テキスト ---
+${inputText}
+
+--- 出力形式（必ずこのJSON形式で返すこと） ---
+{
+  "date": "YYYY-MM-DD",
+  "participants": ["参加者1", "参加者2"],
+  "todayGoal": "今日のゴール",
+  "lastWeekActions": ["①やったこと：結果", "②やったこと：結果"],
+  "problems": "困っていること（なければ空文字）",
+  "todos": [
+    {
+      "no": 1,
+      "task": "箱ひげ図1枚＋説明文3行",
+      "assignee": "山田",
+      "when": "今日",
+      "deadline": "12/25",
+      "goal": "グラフ1枚完成＋説明文3行"
+    }
+  ],
+  "decisions": ["決まったこと1", "決まったこと2"],
+  "nextMeetingGoal": "次回のゴール"
+}
+`;
+
+  try {
+    // REST API直接呼び出し（v1beta API使用）
+    // 正しいモデル名: gemini-2.5-flash (gemini-1.5-flashは存在しない)
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: prompt
+            }]
+          }]
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Gemini API Response Error:', errorText);
+      throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const text = data.candidates[0].content.parts[0].text;
+
+    // JSONブロックを抽出（```json ... ``` のようなマークダウン形式に対応）
+    const jsonMatch = text.match(/```json\s*([\s\S]*?)\s*```/) || text.match(/\{[\s\S]*\}/);
+    const jsonText = jsonMatch ? (jsonMatch[1] || jsonMatch[0]) : text;
+
+    const parsed = JSON.parse(jsonText.trim()) as AIProcessedMinute;
+
+    // バリデーション
+    if (!parsed.date || !/^\d{4}-\d{2}-\d{2}$/.test(parsed.date)) {
+      parsed.date = new Date().toISOString().split('T')[0];
+    }
+    if (!Array.isArray(parsed.participants)) {
+      parsed.participants = [];
+    }
+    if (!Array.isArray(parsed.lastWeekActions)) {
+      parsed.lastWeekActions = [];
+    }
+    if (!Array.isArray(parsed.todos)) {
+      parsed.todos = [];
+    }
+    if (!Array.isArray(parsed.decisions)) {
+      parsed.decisions = [];
+    }
+
+    return parsed;
+  } catch (error) {
+    console.error('Gemini API エラー:', error);
+
+    // エラー時のフォールバック
+    return {
+      date: new Date().toISOString().split('T')[0],
+      participants: [],
+      todayGoal: '（AI処理失敗）',
+      lastWeekActions: [],
+      problems: 'AI処理に失敗しました。手動で編集してください。',
+      todos: [],
+      decisions: [],
+      nextMeetingGoal: '',
+    };
+  }
+}
+
+========================================
+5. 認証プロバイダー - components/auth/AuthProvider.tsx
+========================================
+
+'use client';
+
+import { createContext, useContext, useEffect, useState } from 'react';
+import { User, onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
+
+interface AuthContextType {
+  user: User | null;
+  loading: boolean;
+  signInWithGoogle: () => Promise<void>;
+  logout: () => Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextType>({
+  user: null,
+  loading: true,
+  signInWithGoogle: async () => {},
+  logout: async () => {},
+});
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const signInWithGoogle = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      console.error('ログインエラー:', error);
+      throw error;
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await signOut(auth);
+    } catch (error) {
+      console.error('ログアウトエラー:', error);
+      throw error;
+    }
+  };
+
+  return (
+    <AuthContext.Provider value={{ user, loading, signInWithGoogle, logout }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+export function useAuth() {
+  return useContext(AuthContext);
+}
+
+========================================
+6. ファイルアップローダー - components/files/FileUploader.tsx
+========================================
+
+'use client';
+
+import { useState } from 'react';
+import { AttachedFile } from '@/types';
+import { Timestamp } from 'firebase/firestore';
+
+interface FileUploaderProps {
+  userId: string;
+  onFileUploaded: (file: AttachedFile) => void;
+  acceptedTypes?: string;
+  maxSizeMB?: number;
+}
+
+export default function FileUploader({
+  userId,
+  onFileUploaded,
+  acceptedTypes = '.pdf,.docx,.xlsx,.pptx,.txt,.png,.jpg,.jpeg',
+  maxSizeMB = 0.5, // Firestore制限のため500KBに変更（Base64化後も余裕を持って1MB以内）
+}: FileUploaderProps) {
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [description, setDescription] = useState('');
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // ファイルサイズチェック
+    const maxSize = maxSizeMB * 1024 * 1024;
+    if (file.size > maxSize) {
+      const sizeInKB = Math.round(maxSizeMB * 1024);
+      alert(`ファイルサイズは${sizeInKB}KB以下にしてください\n（Firestore無料版の制限：Base64化後1MB以内）`);
+      return;
+    }
+
+    setSelectedFile(file);
+    setDescription('');
+  };
+
+  const getFileType = (fileName: string): string => {
+    const ext = fileName.split('.').pop()?.toLowerCase() || '';
+    const typeMap: { [key: string]: string } = {
+      pdf: 'pdf',
+      doc: 'docx',
+      docx: 'docx',
+      xls: 'xlsx',
+      xlsx: 'xlsx',
+      ppt: 'pptx',
+      pptx: 'pptx',
+      txt: 'txt',
+      png: 'image',
+      jpg: 'image',
+      jpeg: 'image',
+      gif: 'image',
+    };
+    return typeMap[ext] || 'other';
+  };
+
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = (error) => reject(error);
+    });
+  };
+
+  const handleUpload = async () => {
+    if (!selectedFile) {
+      alert('ファイルを選択してください');
+      return;
+    }
+
+    setUploading(true);
+    setUploadProgress(0);
+
+    try {
+      // ファイルをBase64に変換
+      setUploadProgress(30);
+      const base64Data = await fileToBase64(selectedFile);
+
+      setUploadProgress(60);
+      const timestamp = Date.now();
+      const fileName = selectedFile.name;
+
+      const attachedFile: AttachedFile = {
+        id: `file_${timestamp}`,
+        fileName: fileName,
+        fileType: getFileType(fileName),
+        fileSize: selectedFile.size,
+        fileUrl: base64Data, // Base64データを直接保存
+        storagePath: `firestore/${userId}/${timestamp}_${fileName}`, // 参照用
+        uploadedBy: userId,
+        uploadedAt: Timestamp.now(),
+        description: description.trim() || null,
+      };
+
+      setUploadProgress(90);
+
+      onFileUploaded(attachedFile);
+
+      setUploadProgress(100);
+
+      // リセット
+      setTimeout(() => {
+        setSelectedFile(null);
+        setDescription('');
+        setUploadProgress(0);
+        setUploading(false);
+        alert('アップロードが完了しました！');
+      }, 500);
+
+    } catch (error) {
+      console.error('アップロードエラー:', error);
+      alert('アップロードに失敗しました');
+      setUploading(false);
+      setUploadProgress(0);
+    }
+  };
+
+  const handleCancel = () => {
+    setSelectedFile(null);
+    setDescription('');
+    setUploadProgress(0);
+  };
+
+  return (
+    <div className="border-2 border-dashed border-gray-300 rounded-lg p-6">
+      <h4 className="font-bold text-gray-700 mb-4">📎 ファイルをアップロード</h4>
+      <p className="text-xs text-red-600 font-semibold mb-3">
+        ⚠️ 重要：最大500KBまで（Firestore無料版の制限）
+      </p>
+      <p className="text-xs text-gray-500 mb-3">
+        💡 ヒント：PDFは圧縮、Wordは画像を減らすと小さくなります
+      </p>
+
+      {!selectedFile ? (
+        <div>
+          <label className="block">
+            <div className="flex items-center justify-center w-full h-32 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100 transition">
+              <div className="text-center">
+                <p className="text-gray-600 mb-2">📁 ファイルを選択</p>
+                <p className="text-xs text-gray-500">
+                  Word, PDF, Excel, PowerPoint, 画像
+                </p>
+                <p className="text-xs text-red-600 font-semibold">
+                  最大500KB
+                </p>
+              </div>
+            </div>
+            <input
+              type="file"
+              onChange={handleFileSelect}
+              accept={acceptedTypes}
+              className="hidden"
+            />
+          </label>
+        </div>
+      ) : (
+        <div>
+          {/* 選択されたファイル情報 */}
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+            <div className="flex items-start justify-between mb-2">
+              <div className="flex-1">
+                <p className="font-semibold text-blue-900">{selectedFile.name}</p>
+                <p className="text-sm text-blue-700">
+                  {getFileType(selectedFile.name)} • {(selectedFile.size / 1024).toFixed(1)} KB
+                </p>
+              </div>
+              <button
+                onClick={handleCancel}
+                className="text-red-600 hover:text-red-800 text-sm font-semibold"
+                disabled={uploading}
+              >
+                ✕ キャンセル
+              </button>
+            </div>
+
+            {/* ファイルの説明（オプション） */}
+            <div className="mt-3">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                説明（オプション）
+              </label>
+              <input
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="このファイルの説明を入力..."
+                className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                disabled={uploading}
+              />
+            </div>
+          </div>
+
+          {/* アップロード進捗 */}
+          {uploading && (
+            <div className="mb-4">
+              <div className="flex justify-between text-sm text-gray-600 mb-1">
+                <span>処理中...</span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div
+                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${uploadProgress}%` }}
+                ></div>
+              </div>
+            </div>
+          )}
+
+          {/* アップロードボタン */}
+          <button
+            onClick={handleUpload}
+            disabled={uploading}
+            className={`w-full py-3 rounded-lg font-semibold ${
+              uploading
+                ? 'bg-gray-400 cursor-not-allowed'
+                : 'bg-blue-600 hover:bg-blue-700 text-white'
+            }`}
+          >
+            {uploading ? `処理中... ${uploadProgress}%` : '📤 アップロード'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+========================================
+7. ダッシュボード - app/dashboard/page.tsx
+========================================
+
+'use client';
+
+import { useAuth } from '@/components/auth/AuthProvider';
+import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
+
+export default function Dashboard() {
+  const { user, loading, logout } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/');
+    }
+  }, [user, loading, router]);
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+      router.push('/');
+    } catch (error) {
+      console.error('ログアウトエラー:', error);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <p className="text-gray-600">読み込み中...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* ヘッダー */}
+      <header className="bg-white shadow">
+        <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex justify-between items-center">
+          <h1 className="text-2xl font-bold text-gray-900">
+            研究室ノウハウ蓄積システム
+          </h1>
+          <div className="flex items-center gap-4">
+            <div className="text-right">
+              <p className="text-sm text-gray-600">ログイン中</p>
+              <p className="text-sm font-semibold text-gray-900">{user.email}</p>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+            >
+              ログアウト
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* メインコンテンツ */}
+      <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
+        <div className="mb-8">
+          <h2 className="text-3xl font-bold text-gray-900 mb-2">
+            ようこそ、{user.displayName || 'ユーザー'}さん
+          </h2>
+          <p className="text-gray-600">
+            議事録の作成・管理・検索をスマートに行いましょう
+          </p>
+        </div>
+
+        {/* アクションカード */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          {/* 新規議事録作成 */}
+          <button
+            onClick={() => router.push('/minutes/new')}
+            className="bg-white p-6 rounded-lg shadow hover:shadow-lg transition text-left"
+          >
+            <div className="text-4xl mb-3">✏️</div>
+            <h3 className="text-xl font-bold text-gray-900 mb-2">
+              新規議事録作成
+            </h3>
+            <p className="text-gray-600">
+              ゼミ後にテキスト入力、AIが自動整理
+            </p>
+          </button>
+
+          {/* ファイルアップロード */}
+          <button
+            onClick={() => router.push('/upload')}
+            className="bg-gradient-to-br from-purple-50 to-pink-50 border-2 border-purple-300 p-6 rounded-lg shadow hover:shadow-lg transition text-left"
+          >
+            <div className="text-4xl mb-3">📤</div>
+            <h3 className="text-xl font-bold text-purple-900 mb-2">
+              ファイルアップロード
+            </h3>
+            <p className="text-purple-700 font-medium">
+              資料・動画を直接アップロード
+            </p>
+          </button>
+
+          {/* 過去の議事録を見る */}
+          <button
+            onClick={() => router.push('/minutes')}
+            className="bg-white p-6 rounded-lg shadow hover:shadow-lg transition text-left"
+          >
+            <div className="text-4xl mb-3">📚</div>
+            <h3 className="text-xl font-bold text-gray-900 mb-2">
+              過去の議事録を見る
+            </h3>
+            <p className="text-gray-600">
+              過去のノウハウを検索・閲覧
+            </p>
+          </button>
+
+          {/* 先輩の資料・動画 */}
+          <button
+            onClick={() => router.push('/archives')}
+            className="bg-white p-6 rounded-lg shadow hover:shadow-lg transition text-left"
+          >
+            <div className="text-4xl mb-3">🎥</div>
+            <h3 className="text-xl font-bold text-gray-900 mb-2">
+              先輩の資料・動画
+            </h3>
+            <p className="text-gray-600">
+              研究発表動画やノウハウ資料を閲覧
+            </p>
+          </button>
+        </div>
+
+        {/* 使い方ガイド */}
+        <div className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-xl font-bold text-gray-900 mb-4">📖 使い方ガイド</h3>
+          <div className="space-y-4">
+            <div className="flex items-start gap-3">
+              <span className="flex-shrink-0 w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold">
+                1
+              </span>
+              <div>
+                <h4 className="font-semibold text-gray-900">議事録を作成</h4>
+                <p className="text-sm text-gray-600">
+                  「新規議事録作成」から、ゼミの内容をテキストで入力します。AIが自動で整理してくれます。
+                </p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="flex-shrink-0 w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold">
+                2
+              </span>
+              <div>
+                <h4 className="font-semibold text-gray-900">ファイルをアップロード</h4>
+                <p className="text-sm text-gray-600">
+                  Word、PDF、Excel、動画などのファイルを議事録に添付できます。先輩の研究発表動画も保存可能。
+                </p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="flex-shrink-0 w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center font-bold">
+                3
+              </span>
+              <div>
+                <h4 className="font-semibold text-gray-900">過去のノウハウを検索</h4>
+                <p className="text-sm text-gray-600">
+                  「過去の議事録を見る」から、キーワード検索やタグ検索で必要な情報をすぐに見つけられます。
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+========================================
+8. アーカイブページ - app/archives/page.tsx（年度別フィルター機能）
+========================================
+
+'use client';
+
+import { useAuth } from '@/components/auth/AuthProvider';
+import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { Minute, AttachedFile } from '@/types';
+import { db } from '@/lib/firebase';
+import { collection, query, where, orderBy, getDocs, doc, deleteDoc } from 'firebase/firestore';
+import VideoPlayer from '@/components/files/VideoPlayer';
+
+export default function ArchivesPage() {
+  const { user, loading } = useAuth();
+  const router = useRouter();
+  const [minutes, setMinutes] = useState<Minute[]>([]);
+  const [loadingData, setLoadingData] = useState(true);
+  const [fileTypeFilter, setFileTypeFilter] = useState<'all' | 'video' | 'pdf' | 'docx' | 'xlsx' | 'image'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedYear, setSelectedYear] = useState<string>('all');
+  const [groupByYear, setGroupByYear] = useState(false);
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/');
+    }
+  }, [user, loading, router]);
+
+  useEffect(() => {
+    if (user) {
+      fetchArchives();
+    }
+  }, [user]);
+
+  const fetchArchives = async () => {
+    if (!user) return;
+
+    setLoadingData(true);
+    try {
+      const q = query(
+        collection(db, 'minutes'),
+        where('userId', '==', user.uid),
+        orderBy('createdAt', 'desc')
+      );
+
+      const snapshot = await getDocs(q);
+      const minutesData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Minute[];
+
+      // 添付ファイルがある議事録のみ
+      const withFiles = minutesData.filter(m => m.attachedFiles && m.attachedFiles.length > 0);
+      setMinutes(withFiles);
+    } catch (error) {
+      console.error('アーカイブの取得に失敗:', error);
+    } finally {
+      setLoadingData(false);
+    }
+  };
+
+  const handleDeleteMinute = async (minuteId: string, minuteGoal: string) => {
+    if (!window.confirm(`「${minuteGoal}」を削除しますか？\n\nこの操作は取り消せません。`)) {
+      return;
+    }
+
+    try {
+      await deleteDoc(doc(db, 'minutes', minuteId));
+      alert('削除しました');
+      fetchArchives(); // 再読み込み
+    } catch (error) {
+      console.error('削除エラー:', error);
+      alert('削除に失敗しました');
+    }
+  };
+
+  // すべてのファイルを取得
+  const allFiles = minutes.flatMap(m =>
+    (m.attachedFiles || []).map(file => ({
+      ...file,
+      minuteId: m.id,
+      minuteDate: m.date,
+      minuteGoal: m.todayGoal,
+    }))
+  );
+
+  // 年度の取得（日付から年度を計算: 4月始まり）
+  const getAcademicYear = (dateString: string): number => {
+    const date = new Date(dateString);
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1; // 0-indexed to 1-indexed
+    // 4月以降なら現在年度、3月以前なら前年度
+    return month >= 4 ? year : year - 1;
+  };
+
+  // すべての年度を取得
+  const allYears = Array.from(
+    new Set(allFiles.map(f => getAcademicYear(f.minuteDate)))
+  ).sort((a, b) => b - a); // 降順
+
+  // フィルタリング
+  let filteredFiles = allFiles;
+
+  // 年度フィルター
+  if (selectedYear !== 'all') {
+    const yearNum = parseInt(selectedYear);
+    filteredFiles = filteredFiles.filter(f => getAcademicYear(f.minuteDate) === yearNum);
+  }
+
+  if (fileTypeFilter !== 'all') {
+    filteredFiles = filteredFiles.filter(f => f.fileType === fileTypeFilter);
+  }
+
+  if (searchQuery.trim()) {
+    const query = searchQuery.toLowerCase();
+    filteredFiles = filteredFiles.filter(f =>
+      f.fileName.toLowerCase().includes(query) ||
+      f.description?.toLowerCase().includes(query) ||
+      f.minuteGoal?.toLowerCase().includes(query)
+    );
+  }
+
+  // ファイルタイプ別の件数
+  const videosCount = allFiles.filter(f => f.fileType === 'video').length;
+  const docsCount = allFiles.filter(f => f.fileType === 'pdf' || f.fileType === 'docx' || f.fileType === 'xlsx' || f.fileType === 'pptx').length;
+  const imagesCount = allFiles.filter(f => f.fileType === 'image').length;
+
+  if (loading || loadingData) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <p className="text-gray-600">読み込み中...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 py-8">
+      <div className="max-w-7xl mx-auto px-4">
+        {/* ヘッダー */}
+        <div className="flex justify-between items-center mb-6">
+          <div>
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="text-blue-600 hover:text-blue-800 mb-2 flex items-center gap-1"
+            >
+              ← ダッシュボードに戻る
+            </button>
+            <h1 className="text-3xl font-bold text-gray-900">先輩の資料・動画アーカイブ</h1>
+            <p className="text-gray-600 mt-2">
+              研究発表動画やノウハウ資料を閲覧・検索できます
+            </p>
+          </div>
+        </div>
+
+        {/* 統計カード */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+          <div className="bg-white p-4 rounded-lg shadow">
+            <div className="text-3xl mb-2">🎥</div>
+            <p className="text-sm text-gray-600">動画</p>
+            <p className="text-2xl font-bold text-gray-900">{videosCount}件</p>
+          </div>
+          <div className="bg-white p-4 rounded-lg shadow">
+            <div className="text-3xl mb-2">📄</div>
+            <p className="text-sm text-gray-600">ドキュメント</p>
+            <p className="text-2xl font-bold text-gray-900">{docsCount}件</p>
+          </div>
+          <div className="bg-white p-4 rounded-lg shadow">
+            <div className="text-3xl mb-2">🖼️</div>
+            <p className="text-sm text-gray-600">画像</p>
+            <p className="text-2xl font-bold text-gray-900">{imagesCount}件</p>
+          </div>
+        </div>
+
+        {/* 検索とフィルター */}
+        <div className="bg-white rounded-lg shadow p-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">年度</label>
+              <select
+                value={selectedYear}
+                onChange={(e) => setSelectedYear(e.target.value)}
+                className="w-full p-2 border border-gray-300 rounded-lg"
+              >
+                <option value="all">すべての年度 ({allFiles.length}件)</option>
+                {allYears.map(year => {
+                  const yearFiles = allFiles.filter(f => getAcademicYear(f.minuteDate) === year);
+                  return (
+                    <option key={year} value={year}>
+                      {year}年度 ({yearFiles.length}件)
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">ファイルタイプ</label>
+              <select
+                value={fileTypeFilter}
+                onChange={(e) => setFileTypeFilter(e.target.value as any)}
+                className="w-full p-2 border border-gray-300 rounded-lg"
+              >
+                <option value="all">すべて ({allFiles.length}件)</option>
+                <option value="video">動画 ({videosCount}件)</option>
+                <option value="pdf">PDF</option>
+                <option value="docx">Word</option>
+                <option value="xlsx">Excel</option>
+                <option value="image">画像 ({imagesCount}件)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">検索</label>
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="ファイル名、説明で検索..."
+                className="w-full p-2 border border-gray-300 rounded-lg"
+              />
+            </div>
+          </div>
+
+          {/* 年度別グループ化トグル */}
+          <div className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="groupByYear"
+              checked={groupByYear}
+              onChange={(e) => setGroupByYear(e.target.checked)}
+              className="w-4 h-4 text-blue-600 rounded"
+            />
+            <label htmlFor="groupByYear" className="text-sm text-gray-700 cursor-pointer">
+              年度別にグループ化して表示
+            </label>
+          </div>
+        </div>
+
+        {/* ファイル一覧 */}
+        {filteredFiles.length === 0 ? (
+          <div className="bg-white rounded-lg shadow p-8 text-center">
+            <p className="text-gray-600 mb-4">
+              {allFiles.length === 0
+                ? 'まだファイルがアップロードされていません'
+                : '条件に一致するファイルがありません'}
+            </p>
+            <button
+              onClick={() => router.push('/minutes/new')}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+            >
+              議事録を作成してファイルをアップロード
+            </button>
+          </div>
+        ) : groupByYear ? (
+          // 年度別グループ化表示
+          <div className="space-y-8">
+            {allYears
+              .filter(year => filteredFiles.some(f => getAcademicYear(f.minuteDate) === year))
+              .map(year => {
+                const yearFiles = filteredFiles.filter(f => getAcademicYear(f.minuteDate) === year);
+                return (
+                  <div key={year} className="bg-white rounded-lg shadow p-6">
+                    <h2 className="text-2xl font-bold text-gray-900 mb-4 border-b pb-3">
+                      📅 {year}年度 ({yearFiles.length}件)
+                    </h2>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                      {yearFiles.map((file: any) => (
+                        <div key={file.id} className="border rounded-lg p-3 hover:shadow-md transition">
+                          <div className="text-3xl mb-2 text-center">
+                            {file.fileType === 'video' && '🎥'}
+                            {file.fileType === 'pdf' && '📕'}
+                            {file.fileType === 'docx' && '📘'}
+                            {file.fileType === 'xlsx' && '📗'}
+                            {file.fileType === 'image' && '🖼️'}
+                          </div>
+                          <p className="text-sm font-semibold text-gray-900 truncate mb-1">
+                            {file.fileName}
+                          </p>
+                          <p className="text-xs text-gray-500 mb-2">{file.minuteDate}</p>
+                          <div className="flex gap-1">
+                            <a
+                              href={file.fileUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex-1 text-center px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                            >
+                              開く
+                            </a>
+                            <button
+                              onClick={() => handleDeleteMinute(file.minuteId, file.minuteGoal || file.fileName)}
+                              className="px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600"
+                              title="削除"
+                            >
+                              🗑️
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        ) : (
+          // 通常表示（ファイルタイプ別）
+          <div className="space-y-6">
+            {/* 動画セクション */}
+            {filteredFiles.filter(f => f.fileType === 'video').length > 0 && (
+              <div>
+                <h2 className="text-xl font-bold text-gray-900 mb-4">🎥 動画</h2>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {filteredFiles.filter(f => f.fileType === 'video').map((file: any) => (
+                    <div key={file.id} className="bg-white rounded-lg shadow overflow-hidden">
+                      <VideoPlayer videoUrl={file.fileUrl} fileName={file.fileName} />
+                      <div className="p-4">
+                        <h3 className="font-semibold text-gray-900 mb-2">{file.fileName}</h3>
+                        {file.description && (
+                          <p className="text-sm text-gray-600 mb-2">{file.description}</p>
+                        )}
+                        <div className="text-xs text-gray-500 mb-3">
+                          <p>議事録: {file.minuteGoal || '未設定'}</p>
+                          <p>日付: {file.minuteDate}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => router.push(`/minutes/${file.minuteId}`)}
+                            className="flex-1 px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                          >
+                            議事録を見る
+                          </button>
+                          <button
+                            onClick={() => handleDeleteMinute(file.minuteId, file.minuteGoal || file.fileName)}
+                            className="px-3 py-2 bg-red-500 text-white text-sm rounded hover:bg-red-600"
+                            title="削除"
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ドキュメントセクション */}
+            {filteredFiles.filter(f => f.fileType !== 'video' && f.fileType !== 'image').length > 0 && (
+              <div>
+                <h2 className="text-xl font-bold text-gray-900 mb-4">📄 ドキュメント</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {filteredFiles.filter(f => f.fileType !== 'video' && f.fileType !== 'image').map((file: any) => (
+                    <div key={file.id} className="bg-white rounded-lg shadow p-4 hover:shadow-lg transition">
+                      <div className="flex items-start justify-between mb-3">
+                        <div className="text-3xl">
+                          {file.fileType === 'pdf' && '📕'}
+                          {file.fileType === 'docx' && '📘'}
+                          {file.fileType === 'xlsx' && '📗'}
+                          {file.fileType === 'pptx' && '📙'}
+                          {!['pdf', 'docx', 'xlsx', 'pptx'].includes(file.fileType) && '📄'}
+                        </div>
+                        <span className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
+                          {file.fileType.toUpperCase()}
+                        </span>
+                      </div>
+                      <h3 className="font-semibold text-gray-900 mb-2">{file.fileName}</h3>
+                      {file.description && (
+                        <p className="text-sm text-gray-600 mb-2">{file.description}</p>
+                      )}
+                      <div className="text-xs text-gray-500 mb-3">
+                        <p>{(file.fileSize / 1024).toFixed(1)} KB</p>
+                        <p>{file.minuteDate}</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <a
+                          href={file.fileUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex-1 text-center px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                        >
+                          開く
+                        </a>
+                        <button
+                          onClick={() => router.push(`/minutes/${file.minuteId}`)}
+                          className="px-3 py-2 bg-gray-200 text-gray-700 text-sm rounded hover:bg-gray-300"
+                        >
+                          議事録
+                        </button>
+                        <button
+                          onClick={() => handleDeleteMinute(file.minuteId, file.minuteGoal || file.fileName)}
+                          className="px-3 py-2 bg-red-500 text-white text-sm rounded hover:bg-red-600"
+                          title="削除"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* 画像セクション */}
+            {filteredFiles.filter(f => f.fileType === 'image').length > 0 && (
+              <div>
+                <h2 className="text-xl font-bold text-gray-900 mb-4">🖼️ 画像</h2>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  {filteredFiles.filter(f => f.fileType === 'image').map((file: any) => (
+                    <div key={file.id} className="bg-white rounded-lg shadow overflow-hidden hover:shadow-lg transition">
+                      <img
+                        src={file.fileUrl}
+                        alt={file.fileName}
+                        className="w-full h-48 object-cover"
+                      />
+                      <div className="p-3">
+                        <p className="text-sm font-semibold text-gray-900 truncate">{file.fileName}</p>
+                        <p className="text-xs text-gray-500">{file.minuteDate}</p>
+                        <div className="flex gap-1 mt-2">
+                          <a
+                            href={file.fileUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex-1 text-center px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                          >
+                            開く
+                          </a>
+                          <button
+                            onClick={() => router.push(`/minutes/${file.minuteId}`)}
+                            className="px-2 py-1 bg-gray-200 text-gray-700 text-xs rounded hover:bg-gray-300"
+                          >
+                            議事録
+                          </button>
+                          <button
+                            onClick={() => handleDeleteMinute(file.minuteId, file.minuteGoal || file.fileName)}
+                            className="px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-600"
+                            title="削除"
+                          >
+                            🗑️
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+========================================
+9. 議事録作成 - app/minutes/new/page.tsx
+========================================
+
+'use client';
+
+import { useAuth } from '@/components/auth/AuthProvider';
+import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { AIProcessedMinute, TodoItem, MilestoneItem, AttachedFile } from '@/types';
+import { db } from '@/lib/firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import FileUploader from '@/components/files/FileUploader';
+
+// デフォルトのマイルストーン
+const DEFAULT_MIDTERM_MILESTONES: MilestoneItem[] = [
+  { label: 'テーマ・目的', completed: false },
+  { label: '研究背景', completed: false },
+  { label: '研究目的', completed: false },
+  { label: '研究仮説', completed: false },
+  { label: '研究目標', completed: false },
+  { label: '検証方法', completed: false },
+  { label: '検証計画表', completed: false },
+];
+
+const DEFAULT_FINAL_MILESTONES: MilestoneItem[] = [
+  { label: 'テーマ・目的', completed: false },
+  { label: '研究背景', completed: false },
+  { label: '研究目的', completed: false },
+  { label: '研究仮説', completed: false },
+  { label: '研究目標', completed: false },
+  { label: '検証方法', completed: false },
+  { label: '検証結果', completed: false },
+  { label: '考察', completed: false },
+  { label: '結論', completed: false },
+  { label: '今後の課題', completed: false },
+];
+
+export default function NewMinute() {
+  const { user, loading } = useAuth();
+  const router = useRouter();
+  const [inputText, setInputText] = useState('');
+  const [processing, setProcessing] = useState(false);
+  const [aiResult, setAiResult] = useState<AIProcessedMinute | null>(null);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  // 基本情報
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [participants, setParticipants] = useState<string[]>([]);
+  const [participantInput, setParticipantInput] = useState('');
+
+  // 発表日程
+  const [midtermDate, setMidtermDate] = useState('');
+  const [finalDate, setFinalDate] = useState('');
+
+  // フォーム項目（優先順位順）
+  const [decisions, setDecisions] = useState<string[]>(['', '']);
+  const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [nextMeetingDate, setNextMeetingDate] = useState('');
+  const [nextMeetingGoal, setNextMeetingGoal] = useState('');
+  const [todayGoal, setTodayGoal] = useState('');
+  const [lastWeekActions, setLastWeekActions] = useState<string[]>(['', '', '']);
+  const [problems, setProblems] = useState('');
+  const [nextDeliverablesFigures, setNextDeliverablesFigures] = useState<number>(0);
+  const [nextDeliverablesTables, setNextDeliverablesTables] = useState<number>(0);
+  const [nextDeliverablesSlides, setNextDeliverablesSlides] = useState<number>(0);
+  const [nextDeliverablesWords, setNextDeliverablesWords] = useState<number>(0);
+  const [midtermMilestones, setMidtermMilestones] = useState<MilestoneItem[]>(DEFAULT_MIDTERM_MILESTONES);
+  const [finalMilestones, setFinalMilestones] = useState<MilestoneItem[]>(DEFAULT_FINAL_MILESTONES);
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState('');
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+
+  // 折りたたみ状態
+  const [showDetails, setShowDetails] = useState(false);
+  const [showMilestones, setShowMilestones] = useState(false);
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/');
+    }
+  }, [user, loading, router]);
+
+  // AI結果を反映
+  useEffect(() => {
+    if (aiResult) {
+      setDate(aiResult.date);
+      setParticipants(aiResult.participants);
+      setTodayGoal(aiResult.todayGoal);
+      setLastWeekActions([...aiResult.lastWeekActions, '', '', ''].slice(0, 3));
+      setProblems(aiResult.problems);
+      setTodos(aiResult.todos);
+      setDecisions([...aiResult.decisions, '', '']);
+      setNextMeetingGoal(aiResult.nextMeetingGoal);
+    }
+  }, [aiResult]);
+
+  const handleProcessWithAI = async () => {
+    if (inputText.trim().length < 50) {
+      setError('最低50文字以上入力してください');
+      return;
+    }
+
+    setError('');
+    setProcessing(true);
+
+    try {
+      const response = await fetch('/api/ai/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ inputText }),
+      });
+
+      if (!response.ok) {
+        throw new Error('AI処理に失敗しました');
+      }
+
+      const result: AIProcessedMinute = await response.json();
+      setAiResult(result);
+    } catch (err) {
+      setError('AI処理中にエラーが発生しました');
+      console.error(err);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const handleSave = async (status: 'draft' | 'confirmed') => {
+    if (!user) return;
+
+    if (!todayGoal.trim()) {
+      setError('今日のゴールは必須です');
+      return;
+    }
+
+    setSaving(true);
+    setError('');
+
+    // 発表までの日数を計算
+    const today = new Date();
+    const calcDaysTo = (targetDate: string) => {
+      if (!targetDate) return null;
+      const target = new Date(targetDate);
+      return Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    };
+
+    try {
+      await addDoc(collection(db, 'minutes'), {
+        userId: user.uid,
+        inputMode: 'manual',
+        date,
+        participants: participants.length > 0 ? participants : null,
+        midtermDate: midtermDate || null,
+        finalDate: finalDate || null,
+        daysToMidterm: calcDaysTo(midtermDate),
+        daysToFinal: calcDaysTo(finalDate),
+        meetingsToMidterm: null,
+        meetingsToFinal: null,
+        todayGoal: todayGoal.trim(),
+        lastWeekActions: lastWeekActions.filter(a => a.trim()).length > 0 ? lastWeekActions.filter(a => a.trim()) : null,
+        problems: problems.trim() || null,
+        todos: todos.filter(t => t.task.trim()).length > 0 ? todos.filter(t => t.task.trim()) : null,
+        weeklySchedule: null,
+        nextDeliverables: (nextDeliverablesFigures || nextDeliverablesTables || nextDeliverablesSlides || nextDeliverablesWords) ? {
+          figures: nextDeliverablesFigures || null,
+          tables: nextDeliverablesTables || null,
+          slides: nextDeliverablesSlides || null,
+          words: nextDeliverablesWords || null,
+        } : null,
+        decisions: decisions.filter(d => d.trim()).length > 0 ? decisions.filter(d => d.trim()) : null,
+        nextMeetingDate: nextMeetingDate || null,
+        nextMeetingGoal: nextMeetingGoal.trim() || null,
+        midtermMilestones: midtermMilestones || null,
+        finalMilestones: finalMilestones || null,
+        attachedFiles: attachedFiles.length > 0 ? attachedFiles : null,
+        tags: tags.length > 0 ? tags : null,
+        status,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+
+      router.push('/dashboard');
+    } catch (err) {
+      setError('保存中にエラーが発生しました');
+      console.error(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addParticipant = () => {
+    if (participantInput.trim() && !participants.includes(participantInput.trim())) {
+      setParticipants([...participants, participantInput.trim()]);
+      setParticipantInput('');
+    }
+  };
+
+  const removeParticipant = (index: number) => {
+    setParticipants(participants.filter((_, i) => i !== index));
+  };
+
+  const addTodo = () => {
+    setTodos([
+      ...todos,
+      {
+        no: todos.length + 1,
+        task: '',
+        assignee: '',
+        when: '',
+        deadline: '',
+        goal: '',
+      },
+    ]);
+  };
+
+  const updateTodo = (index: number, field: keyof TodoItem, value: string | number) => {
+    const newTodos = [...todos];
+    newTodos[index] = { ...newTodos[index], [field]: value };
+    setTodos(newTodos);
+  };
+
+  const removeTodo = (index: number) => {
+    const newTodos = todos.filter((_, i) => i !== index);
+    newTodos.forEach((todo, i) => {
+      todo.no = i + 1;
+    });
+    setTodos(newTodos);
+  };
+
+  const addTag = () => {
+    if (tagInput.trim() && !tags.includes(tagInput.trim())) {
+      setTags([...tags, tagInput.trim()]);
+      setTagInput('');
+    }
+  };
+
+  const removeTag = (index: number) => {
+    setTags(tags.filter((_, i) => i !== index));
+  };
+
+  const toggleMilestone = (type: 'midterm' | 'final', index: number) => {
+    if (type === 'midterm') {
+      const newMilestones = [...midtermMilestones];
+      newMilestones[index].completed = !newMilestones[index].completed;
+      setMidtermMilestones(newMilestones);
+    } else {
+      const newMilestones = [...finalMilestones];
+      newMilestones[index].completed = !newMilestones[index].completed;
+      setFinalMilestones(newMilestones);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <p className="text-gray-600">読み込み中...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 py-8">
+      <div className="max-w-5xl mx-auto px-4">
+        <div className="mb-6">
+          <button
+            onClick={() => router.push('/dashboard')}
+            className="text-blue-600 hover:text-blue-800 flex items-center gap-1"
+          >
+            ← ダッシュボードに戻る
+          </button>
+        </div>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">研究会議 議事録作成</h1>
+        <p className="text-sm text-gray-600 mb-8">重要な情報から順に表示されます</p>
+
+        {/* Step 1: AI処理 */}
+        {!aiResult && (
+          <div className="bg-white rounded-lg shadow p-6 mb-6">
+            <h2 className="text-xl font-semibold text-gray-800 mb-4">
+              議事録を入力してAI整理
+            </h2>
+            <p className="text-sm text-gray-600 mb-4">
+              自由記述で議事録の内容を入力してください。AIが重要な情報を整理します。
+            </p>
+            <textarea
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              className="w-full h-64 p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="例:&#10;2024年12月24日の研究室MTGを実施。参加者は山田、佐藤、田中。&#10;今日のゴールは中間発表の構成を決めること。&#10;先週は文献調査を実施し、論文10本をレビューした。&#10;問題点として、データ収集の遅れがある。&#10;次回までに山田がグラフ3枚作成、佐藤が分析結果まとめ、明後日までに完成させる。&#10;決まったことは、中間発表は1月15日に実施することと、週2回ミーティングを行うこと。&#10;次回のゴールは分析結果の共有。"
+            />
+            <button
+              onClick={handleProcessWithAI}
+              disabled={processing || inputText.trim().length < 50}
+              className="mt-4 bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition font-semibold"
+            >
+              {processing ? '処理中...' : 'AI整理する'}
+            </button>
+          </div>
+        )}
+
+        {/* Step 2: 編集・確認（優先順位順） */}
+        {aiResult && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <h2 className="text-xl font-semibold text-gray-800">
+                内容を確認・編集
+              </h2>
+              <button
+                onClick={() => setAiResult(null)}
+                className="text-sm text-gray-600 hover:text-gray-800"
+              >
+                ← テキスト入力に戻る
+              </button>
+            </div>
+
+            {/* 🔴 最優先: 決まったこと（赤） */}
+            <div className="bg-red-50 border-2 border-red-300 rounded-lg p-6">
+              <h3 className="text-lg font-bold text-red-800 mb-1 flex items-center gap-2">
+                🔴 決まったこと（Decision）
+              </h3>
+              <p className="text-xs text-red-600 mb-4">最重要！ここを見れば今日の結論が分かる</p>
+              {decisions.map((decision, i) => (
+                <div key={i} className="mb-2">
+                  <input
+                    type="text"
+                    value={decision}
+                    onChange={(e) => {
+                      const newDecisions = [...decisions];
+                      newDecisions[i] = e.target.value;
+                      setDecisions(newDecisions);
+                    }}
+                    className="w-full p-3 border-2 border-red-200 rounded-lg text-lg font-semibold"
+                    placeholder={`決まったこと ${i + 1}`}
+                    maxLength={50}
+                  />
+                </div>
+              ))}
+              <button
+                onClick={() => setDecisions([...decisions, ''])}
+                className="mt-2 px-4 py-2 bg-red-200 rounded-lg hover:bg-red-300 text-sm font-semibold"
+              >
+                + 追加
+              </button>
+            </div>
+
+            {/* 🟠 次回までのToDo（オレンジ） */}
+            <div className="bg-orange-50 border-2 border-orange-300 rounded-lg p-6">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <h3 className="text-lg font-bold text-orange-800 flex items-center gap-2">
+                    🟠 次回までのToDo
+                  </h3>
+                  <p className="text-xs text-orange-600">誰が・いつ・何を・どこまで</p>
+                </div>
+                <button
+                  onClick={addTodo}
+                  className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-semibold"
+                >
+                  + ToDo追加
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse border-2 border-orange-300">
+                  <thead className="bg-orange-100">
+                    <tr>
+                      <th className="border border-orange-300 p-2 text-sm font-bold">No</th>
+                      <th className="border border-orange-300 p-2 text-sm font-bold">やること（成果物）</th>
+                      <th className="border border-orange-300 p-2 text-sm font-bold">誰が</th>
+                      <th className="border border-orange-300 p-2 text-sm font-bold">いつ</th>
+                      <th className="border border-orange-300 p-2 text-sm font-bold">期限</th>
+                      <th className="border border-orange-300 p-2 text-sm font-bold">ゴール</th>
+                      <th className="border border-orange-300 p-2 text-sm font-bold">削除</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {todos.map((todo, i) => (
+                      <tr key={i} className="bg-white">
+                        <td className="border border-orange-300 p-2 text-center font-bold">{todo.no}</td>
+                        <td className="border border-orange-300 p-2">
+                          <input
+                            type="text"
+                            value={todo.task}
+                            onChange={(e) => updateTodo(i, 'task', e.target.value)}
+                            className="w-full p-2 border border-orange-200 rounded font-semibold"
+                            placeholder="例: グラフ3枚+説明文"
+                          />
+                        </td>
+                        <td className="border border-orange-300 p-2">
+                          <input
+                            type="text"
+                            value={todo.assignee}
+                            onChange={(e) => updateTodo(i, 'assignee', e.target.value)}
+                            className="w-full p-2 border border-orange-200 rounded"
+                            placeholder="山田"
+                          />
+                        </td>
+                        <td className="border border-orange-300 p-2">
+                          <input
+                            type="text"
+                            value={todo.when}
+                            onChange={(e) => updateTodo(i, 'when', e.target.value)}
+                            className="w-full p-2 border border-orange-200 rounded"
+                            placeholder="明日"
+                          />
+                        </td>
+                        <td className="border border-orange-300 p-2">
+                          <input
+                            type="text"
+                            value={todo.deadline}
+                            onChange={(e) => updateTodo(i, 'deadline', e.target.value)}
+                            className="w-full p-2 border border-orange-200 rounded font-semibold text-red-600"
+                            placeholder="12/25"
+                          />
+                        </td>
+                        <td className="border border-orange-300 p-2">
+                          <input
+                            type="text"
+                            value={todo.goal}
+                            onChange={(e) => updateTodo(i, 'goal', e.target.value)}
+                            className="w-full p-2 border border-orange-200 rounded"
+                            placeholder="完成"
+                          />
+                        </td>
+                        <td className="border border-orange-300 p-2 text-center">
+                          <button
+                            onClick={() => removeTodo(i)}
+                            className="text-red-600 hover:text-red-800 font-bold"
+                          >
+                            ×
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* 🟡 次回MTG（黄色） */}
+            <div className="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-6">
+              <h3 className="text-lg font-bold text-yellow-800 mb-4 flex items-center gap-2">
+                🟡 次回ミーティング
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-yellow-800 mb-1">
+                    次回MTG日時
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={nextMeetingDate}
+                    onChange={(e) => setNextMeetingDate(e.target.value)}
+                    className="w-full p-3 border-2 border-yellow-300 rounded-lg font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-yellow-800 mb-1">
+                    次回のゴール
+                  </label>
+                  <input
+                    type="text"
+                    value={nextMeetingGoal}
+                    onChange={(e) => setNextMeetingGoal(e.target.value)}
+                    maxLength={30}
+                    className="w-full p-3 border-2 border-yellow-300 rounded-lg font-semibold"
+                    placeholder="例: 分析結果の共有"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* 詳細情報（折りたたみ） */}
+            <div className="bg-white border border-gray-300 rounded-lg">
+              <button
+                onClick={() => setShowDetails(!showDetails)}
+                className="w-full p-4 text-left flex justify-between items-center hover:bg-gray-50"
+              >
+                <span className="font-semibold text-gray-800">
+                  📝 詳細情報（基本情報・今日のゴール・Check・Problem等）
+                </span>
+                <span className="text-gray-500">{showDetails ? '▲' : '▼'}</span>
+              </button>
+
+              {showDetails && (
+                <div className="p-6 border-t space-y-6">
+                  {/* 基本情報 */}
+                  <div>
+                    <h4 className="font-semibold text-gray-800 mb-3">基本情報</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">日付</label>
+                        <input
+                          type="date"
+                          value={date}
+                          onChange={(e) => setDate(e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-lg"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">参加者</label>
+                        <div className="flex gap-2 mb-2">
+                          <input
+                            type="text"
+                            value={participantInput}
+                            onChange={(e) => setParticipantInput(e.target.value)}
+                            onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addParticipant())}
+                            placeholder="名前を入力してEnter"
+                            className="flex-1 p-2 border border-gray-300 rounded-lg"
+                          />
+                          <button
+                            onClick={addParticipant}
+                            className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300"
+                          >
+                            追加
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {participants.map((p, i) => (
+                            <span key={i} className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm flex items-center gap-1">
+                              {p}
+                              <button onClick={() => removeParticipant(i)} className="text-blue-600 hover:text-blue-800">×</button>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">中間発表日</label>
+                        <input
+                          type="date"
+                          value={midtermDate}
+                          onChange={(e) => setMidtermDate(e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-lg"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">最終発表日</label>
+                        <input
+                          type="date"
+                          value={finalDate}
+                          onChange={(e) => setFinalDate(e.target.value)}
+                          className="w-full p-2 border border-gray-300 rounded-lg"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 今日のゴール */}
+                  <div>
+                    <h4 className="font-semibold text-gray-800 mb-2">今日のゴール</h4>
+                    <input
+                      type="text"
+                      value={todayGoal}
+                      onChange={(e) => setTodayGoal(e.target.value)}
+                      maxLength={30}
+                      className="w-full p-2 border border-gray-300 rounded-lg"
+                      placeholder="例: 中間発表の構成を決める"
+                    />
+                  </div>
+
+                  {/* Check */}
+                  <div>
+                    <h4 className="font-semibold text-gray-800 mb-2">Check（先週やったこと）</h4>
+                    {lastWeekActions.map((action, i) => (
+                      <div key={i} className="mb-2">
+                        <input
+                          type="text"
+                          value={action}
+                          onChange={(e) => {
+                            const newActions = [...lastWeekActions];
+                            newActions[i] = e.target.value;
+                            setLastWeekActions(newActions);
+                          }}
+                          className="w-full p-2 border border-gray-300 rounded-lg"
+                          placeholder={`${i + 1}. やったこと：結果`}
+                          maxLength={50}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Problem */}
+                  <div>
+                    <h4 className="font-semibold text-gray-800 mb-2">Problem（困っていること）</h4>
+                    <textarea
+                      value={problems}
+                      onChange={(e) => setProblems(e.target.value)}
+                      className="w-full h-20 p-2 border border-gray-300 rounded-lg"
+                      placeholder="なければ空欄でOK"
+                      maxLength={100}
+                    />
+                  </div>
+
+                  {/* 次回持っていくもの */}
+                  <div>
+                    <h4 className="font-semibold text-gray-800 mb-2">次回持っていくもの</h4>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div>
+                        <label className="block text-sm text-gray-700 mb-1">図</label>
+                        <input type="number" value={nextDeliverablesFigures} onChange={(e) => setNextDeliverablesFigures(Number(e.target.value))} className="w-full p-2 border border-gray-300 rounded-lg" min="0" />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-700 mb-1">表</label>
+                        <input type="number" value={nextDeliverablesTables} onChange={(e) => setNextDeliverablesTables(Number(e.target.value))} className="w-full p-2 border border-gray-300 rounded-lg" min="0" />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-700 mb-1">スライド</label>
+                        <input type="number" value={nextDeliverablesSlides} onChange={(e) => setNextDeliverablesSlides(Number(e.target.value))} className="w-full p-2 border border-gray-300 rounded-lg" min="0" />
+                      </div>
+                      <div>
+                        <label className="block text-sm text-gray-700 mb-1">文章（字数）</label>
+                        <input type="number" value={nextDeliverablesWords} onChange={(e) => setNextDeliverablesWords(Number(e.target.value))} className="w-full p-2 border border-gray-300 rounded-lg" min="0" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* タグ */}
+                  <div>
+                    <h4 className="font-semibold text-gray-800 mb-2">タグ</h4>
+                    <div className="flex gap-2 mb-2">
+                      <input
+                        type="text"
+                        value={tagInput}
+                        onChange={(e) => setTagInput(e.target.value)}
+                        onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addTag())}
+                        placeholder="タグを入力してEnter"
+                        className="flex-1 p-2 border border-gray-300 rounded-lg"
+                      />
+                      <button onClick={addTag} className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300">追加</button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {tags.map((tag, i) => (
+                        <span key={i} className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-sm flex items-center gap-1">
+                          {tag}
+                          <button onClick={() => removeTag(i)} className="text-green-600 hover:text-green-800">×</button>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ファイルアップロード（常に表示） */}
+            <div className="bg-gradient-to-r from-purple-50 to-pink-50 border-2 border-purple-300 rounded-lg p-6">
+              <h3 className="text-xl font-bold text-purple-800 mb-1 flex items-center gap-2">
+                📎 ファイル添付
+              </h3>
+              <p className="text-sm text-purple-600 mb-4">
+                研究資料、発表動画、Word/PDF/Excelファイルなどをアップロード
+              </p>
+
+              {user && (
+                <FileUploader
+                  userId={user.uid}
+                  onFileUploaded={(file) => setAttachedFiles([...attachedFiles, file])}
+                />
+              )}
+
+              {/* アップロード済みファイル一覧 */}
+              {attachedFiles.length > 0 && (
+                <div className="mt-6">
+                  <h4 className="font-semibold text-purple-700 mb-3">
+                    ✅ アップロード済みファイル ({attachedFiles.length}件)
+                  </h4>
+                  <div className="space-y-2">
+                    {attachedFiles.map((file, index) => (
+                      <div key={file.id} className="flex items-center justify-between p-3 bg-white rounded-lg border border-purple-200 shadow-sm">
+                        <div className="flex-1">
+                          <p className="font-medium text-gray-900">{file.fileName}</p>
+                          <p className="text-xs text-gray-500">
+                            {file.fileType} • {(file.fileSize / 1024).toFixed(1)} KB
+                          </p>
+                          {file.description && (
+                            <p className="text-sm text-gray-600 mt-1">{file.description}</p>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => setAttachedFiles(attachedFiles.filter((_, i) => i !== index))}
+                          className="ml-3 px-3 py-1 bg-red-500 text-white text-sm rounded hover:bg-red-600"
+                        >
+                          削除
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* マイルストーン（折りたたみ） */}
+            <div className="bg-white border border-gray-300 rounded-lg">
+              <button
+                onClick={() => setShowMilestones(!showMilestones)}
+                className="w-full p-4 text-left flex justify-between items-center hover:bg-gray-50"
+              >
+                <span className="font-semibold text-gray-800">
+                  🎯 マイルストーン管理（中間・最終発表の進捗）
+                </span>
+                <span className="text-gray-500">{showMilestones ? '▲' : '▼'}</span>
+              </button>
+
+              {showMilestones && (
+                <div className="p-6 border-t">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <h4 className="font-semibold text-gray-700 mb-2">中間発表までの階段</h4>
+                      <div className="space-y-2">
+                        {midtermMilestones.map((milestone, i) => (
+                          <label key={i} className="flex items-center gap-2 cursor-pointer p-2 hover:bg-gray-50 rounded">
+                            <input type="checkbox" checked={milestone.completed} onChange={() => toggleMilestone('midterm', i)} className="w-5 h-5" />
+                            <span className={milestone.completed ? 'line-through text-gray-500' : 'font-medium'}>{milestone.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="font-semibold text-gray-700 mb-2">最終発表までの階段</h4>
+                      <div className="space-y-2">
+                        {finalMilestones.map((milestone, i) => (
+                          <label key={i} className="flex items-center gap-2 cursor-pointer p-2 hover:bg-gray-50 rounded">
+                            <input type="checkbox" checked={milestone.completed} onChange={() => toggleMilestone('final', i)} className="w-5 h-5" />
+                            <span className={milestone.completed ? 'line-through text-gray-500' : 'font-medium'}>{milestone.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* エラー表示 */}
+            {error && (
+              <div className="p-4 bg-red-100 text-red-700 rounded-lg border-2 border-red-300 font-semibold">
+                {error}
+              </div>
+            )}
+
+            {/* 保存ボタン */}
+            <div className="flex gap-4 sticky bottom-4 bg-white p-4 rounded-lg shadow-lg border-2 border-gray-300">
+              <button
+                onClick={() => handleSave('draft')}
+                disabled={saving}
+                className="flex-1 bg-gray-600 text-white px-6 py-4 rounded-lg hover:bg-gray-700 disabled:bg-gray-300 transition font-bold text-lg"
+              >
+                {saving ? '保存中...' : '下書き保存'}
+              </button>
+              <button
+                onClick={() => handleSave('confirmed')}
+                disabled={saving}
+                className="flex-1 bg-blue-600 text-white px-6 py-4 rounded-lg hover:bg-blue-700 disabled:bg-gray-300 transition font-bold text-lg"
+              >
+                {saving ? '保存中...' : '確定して保存'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+========================================
+10. ファイルアップロード - app/upload/page.tsx
+========================================
+
+'use client';
+
+import { useAuth } from '@/components/auth/AuthProvider';
+import { useRouter } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { AttachedFile } from '@/types';
+import { db } from '@/lib/firebase';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import FileUploader from '@/components/files/FileUploader';
+
+export default function UploadPage() {
+  const { user, loading } = useAuth();
+  const router = useRouter();
+  const [uploadedFiles, setUploadedFiles] = useState<AttachedFile[]>([]);
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagInput, setTagInput] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/');
+    }
+  }, [user, loading, router]);
+
+  const addTag = () => {
+    if (tagInput.trim() && !tags.includes(tagInput.trim())) {
+      setTags([...tags, tagInput.trim()]);
+      setTagInput('');
+    }
+  };
+
+  const removeTag = (index: number) => {
+    setTags(tags.filter((_, i) => i !== index));
+  };
+
+  const handleSave = async () => {
+    if (!user) return;
+
+    if (uploadedFiles.length === 0) {
+      alert('少なくとも1つのファイルをアップロードしてください');
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      console.log('=== 保存開始 ===');
+      console.log('アップロード済みファイル数:', uploadedFiles.length);
+
+      // 各ファイルのサイズをログ出力
+      uploadedFiles.forEach((file, index) => {
+        const base64Size = file.fileUrl ? file.fileUrl.length : 0;
+        console.log(`ファイル${index + 1}: ${file.fileName}`);
+        console.log(`  - 元のサイズ: ${(file.fileSize / 1024).toFixed(2)}KB`);
+        console.log(`  - Base64サイズ: ${(base64Size / 1024).toFixed(2)}KB`);
+      });
+
+      // ドキュメント全体のサイズを計算（概算）
+      const docData = {
+        userId: user.uid,
+        inputMode: 'upload',
+        date: new Date().toISOString().split('T')[0],
+        participants: null,
+        todayGoal: title.trim() || 'ファイルアーカイブ',
+        decisions: null,
+        todos: null,
+        problems: description.trim() || null,
+        lastWeekActions: null,
+        weeklySchedule: null,
+        nextDeliverables: null,
+        nextMeetingDate: null,
+        nextMeetingGoal: null,
+        midtermMilestones: null,
+        finalMilestones: null,
+        attachedFiles: uploadedFiles,
+        tags: tags.length > 0 ? tags : null,
+        status: 'confirmed',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      };
+
+      // ドキュメントサイズを概算（JSON文字列化）
+      const docSize = new Blob([JSON.stringify(docData)]).size;
+      const docSizeMB = (docSize / (1024 * 1024)).toFixed(2);
+      const docSizeKB = (docSize / 1024).toFixed(2);
+
+      console.log(`ドキュメント全体のサイズ: ${docSizeKB}KB (${docSizeMB}MB, ${docSize}バイト)`);
+
+      if (docSize > 1048576) { // 1MB = 1048576バイト
+        alert(`ドキュメントサイズが大きすぎます: ${docSizeMB}MB (${docSizeKB}KB)\n\nFirestoreの制限: 1MB以内\n\nより小さいファイルをアップロードしてください。`);
+        setSaving(false);
+        return;
+      }
+
+      console.log('Firestoreに保存開始...');
+      // アーカイブとして保存（議事録形式で保存）
+      const docRef = await addDoc(collection(db, 'minutes'), docData);
+      console.log('保存成功！ドキュメントID:', docRef.id);
+
+      alert('ファイルを保存しました！');
+      router.push('/archives');
+    } catch (error: any) {
+      console.error('=== 保存エラー ===');
+      console.error('エラーオブジェクト:', error);
+      console.error('エラーメッセージ:', error.message);
+      console.error('エラーコード:', error.code);
+      console.error('エラースタック:', error.stack);
+
+      let errorMsg = '保存に失敗しました\n\n';
+      if (error.code) {
+        errorMsg += `エラーコード: ${error.code}\n`;
+      }
+      if (error.message) {
+        errorMsg += `詳細: ${error.message}\n`;
+      }
+      errorMsg += '\nブラウザのコンソール（F12）で詳細を確認してください。';
+
+      alert(errorMsg);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <p className="text-gray-600">読み込み中...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 py-8">
+      <div className="max-w-4xl mx-auto px-4">
+        {/* ヘッダー */}
+        <div className="mb-6">
+          <button
+            onClick={() => router.push('/dashboard')}
+            className="text-blue-600 hover:text-blue-800 mb-2 flex items-center gap-1"
+          >
+            ← ダッシュボードに戻る
+          </button>
+          <h1 className="text-3xl font-bold text-gray-900">ファイルアップロード</h1>
+          <p className="text-gray-600 mt-2">
+            研究資料、Word/PDF/Excelファイルなどをアップロード（最大500KB）
+          </p>
+          <p className="text-sm text-red-600 font-semibold mt-1">
+            ⚠️ Firestore無料版のため、ファイルサイズは500KB以下に制限されています
+          </p>
+        </div>
+
+        <div className="space-y-6">
+          {/* タイトル */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <label className="block text-sm font-bold text-gray-700 mb-2">
+              タイトル（任意）
+            </label>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="例: 卒業研究発表資料、実験データまとめ"
+              className="w-full p-3 border border-gray-300 rounded-lg"
+            />
+          </div>
+
+          {/* 説明 */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <label className="block text-sm font-bold text-gray-700 mb-2">
+              説明（任意）
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="このファイルの内容や目的を説明してください"
+              rows={4}
+              className="w-full p-3 border border-gray-300 rounded-lg"
+            />
+          </div>
+
+          {/* タグ */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <label className="block text-sm font-bold text-gray-700 mb-2">
+              タグ（任意）
+            </label>
+            <div className="flex gap-2 mb-3">
+              <input
+                type="text"
+                value={tagInput}
+                onChange={(e) => setTagInput(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && (e.preventDefault(), addTag())}
+                placeholder="タグを入力してEnter（例: 研究発表、実験データ）"
+                className="flex-1 p-2 border border-gray-300 rounded-lg"
+              />
+              <button
+                onClick={addTag}
+                className="px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300"
+              >
+                追加
+              </button>
+            </div>
+            {tags.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {tags.map((tag, i) => (
+                  <span
+                    key={i}
+                    className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-sm flex items-center gap-1"
+                  >
+                    {tag}
+                    <button
+                      onClick={() => removeTag(i)}
+                      className="text-blue-600 hover:text-blue-800 font-bold"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ファイルアップロード */}
+          <div className="bg-gradient-to-r from-purple-50 to-pink-50 border-2 border-purple-300 rounded-lg p-6">
+            <h3 className="text-xl font-bold text-purple-800 mb-1 flex items-center gap-2">
+              📎 ファイルを選択
+            </h3>
+            <p className="text-sm text-purple-600 mb-4">
+              Word、PDF、Excel、画像ファイルなど（最大500KB）
+            </p>
+
+            {user && (
+              <FileUploader
+                userId={user.uid}
+                onFileUploaded={(file) => setUploadedFiles([...uploadedFiles, file])}
+              />
+            )}
+
+            {/* アップロード済みファイル一覧 */}
+            {uploadedFiles.length > 0 && (
+              <div className="mt-6">
+                <h4 className="font-semibold text-purple-700 mb-3">
+                  ✅ アップロード済みファイル ({uploadedFiles.length}件)
+                </h4>
+                <div className="space-y-2">
+                  {uploadedFiles.map((file, index) => (
+                    <div
+                      key={file.id}
+                      className="flex items-center justify-between p-3 bg-white rounded-lg border border-purple-200 shadow-sm"
+                    >
+                      <div className="flex-1">
+                        <p className="font-medium text-gray-900">{file.fileName}</p>
+                        <p className="text-xs text-gray-500">
+                          {file.fileType} • {(file.fileSize / 1024).toFixed(1)} KB
+                        </p>
+                        {file.description && (
+                          <p className="text-sm text-gray-600 mt-1">{file.description}</p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() =>
+                          setUploadedFiles(uploadedFiles.filter((_, i) => i !== index))
+                        }
+                        className="ml-3 px-3 py-1 bg-red-500 text-white text-sm rounded hover:bg-red-600"
+                      >
+                        削除
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 保存ボタン */}
+          <div className="flex gap-4">
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="flex-1 px-6 py-4 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 font-bold text-lg"
+              disabled={saving}
+            >
+              キャンセル
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving || uploadedFiles.length === 0}
+              className="flex-1 px-6 py-4 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 font-bold text-lg"
+            >
+              {saving ? '保存中...' : 'アーカイブに保存'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+========================================
+11. AI処理API - app/api/ai/process/route.ts
+========================================
+
+// AI要約APIエンドポイント
+import { NextRequest, NextResponse } from 'next/server';
+import { processMinuteWithAI } from '@/lib/gemini';
+
+export async function POST(request: NextRequest) {
+  try {
+    const { inputText } = await request.json();
+
+    if (!inputText || inputText.trim().length < 50) {
+      return NextResponse.json(
+        { error: '入力テキストは50文字以上必要です' },
+        { status: 400 }
+      );
+    }
+
+    const result = await processMinuteWithAI(inputText);
+
+    return NextResponse.json(result);
+  } catch (error) {
+    console.error('API エラー:', error);
+    return NextResponse.json(
+      { error: 'AI処理中にエラーが発生しました' },
+      { status: 500 }
+    );
+  }
+}
+
+========================================
+12. PWA設定 - public/manifest.json
+========================================
+
+{
+  "name": "研究室ノウハウ蓄積システム",
+  "short_name": "研究室ノウハウ",
+  "description": "研究室の議事録とファイルを管理するシステム",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#3b82f6",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
+
+========================================
+13. デプロイガイド - README.md（抜粋）
+========================================
+
+# 📚 研究室ノウハウ蓄積システム
+
+研究室のゼミ議事録とファイルを管理するWebアプリケーション
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/YOUR_USERNAME/lab-knowledge-system)
+
+## ✨ 主な機能
+
+### 📝 議事録管理
+- **AI自動整理**: Gemini 2.5 FlashでテキストをAI処理
+- **構造化データ**: 決まったこと、ToDo、問題点などを整理
+- **検索・フィルタリング**: タグ、日付、ステータスで検索
+
+### 📎 ファイルアーカイブ
+- **ファイルアップロード**: Word、PDF、Excel、画像（最大500KB）
+- **Base64保存**: Firebase Storage不要で完全無料
+- **年度別整理**: 年度フィルターとグループ化表示
+- **検索機能**: ファイル名、説明、タグで検索
+
+### 🔒 認証・セキュリティ
+- **Google認証**: Firebase Authentication
+- **ユーザー別管理**: 各ユーザーのデータを分離
+
+### 📱 PWA対応
+- **ホーム画面追加**: スマホアプリのように使用可能
+- **オフライン対応**: （今後実装可能）
+
+---
+
+## 🚀 デプロイ方法
+
+詳細は [QUICK_START.md](./QUICK_START.md) を参照
+
+### クイックスタート
+
+1. **GitHubにpush**
+   ```bash
+   git remote add origin https://github.com/YOUR_USERNAME/lab-knowledge-system.git
+   git push -u origin main
+   ```
+
+2. **Vercelでデプロイ**
+   - https://vercel.com でGitHubリポジトリをインポート
+   - 環境変数を設定
+   - デプロイ！
+
+3. **Firebase設定更新**
+   - 承認済みドメインにVercel URLを追加
+
+---
+
+## 💻 ローカル開発
+
+### 必要なもの
+- Node.js 18以上
+- Firebase プロジェクト
+- Gemini API キー
+
+### セットアップ
+
+1. **リポジトリをクローン**
+   ```bash
+   git clone https://github.com/YOUR_USERNAME/lab-knowledge-system.git
+   cd lab-knowledge-system
+   ```
+
+2. **依存関係をインストール**
+   ```bash
+   npm install
+   ```
+
+3. **環境変数を設定**
+   `.env.local`ファイルを作成：
+   ```env
+   NEXT_PUBLIC_FIREBASE_API_KEY=your_api_key
+   NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
+   NEXT_PUBLIC_FIREBASE_PROJECT_ID=your_project_id
+   NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your_project.appspot.com
+   NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
+   NEXT_PUBLIC_FIREBASE_APP_ID=your_app_id
+   GEMINI_API_KEY=your_gemini_api_key
+   ```
+
+4. **開発サーバーを起動**
+   ```bash
+   npm run dev
+   ```
+
+5. **ブラウザで開く**
+   http://localhost:3000
+
+---
+
+## 🛠️ 技術スタック
+
+- **フロントエンド**: Next.js 16 (App Router), React, TypeScript
+- **スタイリング**: Tailwind CSS
+- **認証**: Firebase Authentication
+- **データベース**: Cloud Firestore
+- **AI**: Google Gemini 2.5 Flash API
+
+========================================
+14. 環境変数（.env.local）- 実際の値は非公開
+========================================
+NEXT_PUBLIC_FIREBASE_API_KEY=***
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=***.firebaseapp.com
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=***
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=***.appspot.com
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=***
+NEXT_PUBLIC_FIREBASE_APP_ID=***
+GEMINI_API_KEY=***
+
+========================================
+完成！
+========================================
+
