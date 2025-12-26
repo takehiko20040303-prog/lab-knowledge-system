@@ -93,7 +93,7 @@ export default function FileUploader({
         storagePath: `firestore/${userId}/${timestamp}_${fileName}`, // 参照用
         uploadedBy: userId,
         uploadedAt: Timestamp.now(),
-        description: description.trim() || undefined,
+        ...(description.trim() && { description: description.trim() }),
       };
 
       setUploadProgress(90);
