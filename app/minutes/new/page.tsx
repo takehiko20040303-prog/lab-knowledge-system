@@ -140,30 +140,17 @@ export default function NewMinute() {
     setError('');
 
     try {
-      await minuteRepository.create({
+      // undefinedフィールドを除外してFirestoreに保存
+      const minuteData: any = {
         userId: user.uid,
         inputMode: 'manual' as const,
         date,
         participants: participants.length > 0 ? participants : [],
-        midtermDate: midtermDate || undefined,
-        finalDate: finalDate || undefined,
-        daysToMidterm: midtermDate ? calcDaysTo(midtermDate) : undefined,
-        daysToFinal: finalDate ? calcDaysTo(finalDate) : undefined,
-        meetingsToMidterm: undefined,
-        meetingsToFinal: undefined,
         todayGoal: todayGoal.trim(),
         lastWeekActions: lastWeekActions.filter(a => a.trim()),
         problems: problems.trim(),
         todos: todos.filter(t => t.task.trim()),
-        weeklySchedule: undefined,
-        nextDeliverables: {
-          figures: nextDeliverablesFigures || undefined,
-          tables: nextDeliverablesTables || undefined,
-          slides: nextDeliverablesSlides || undefined,
-          words: nextDeliverablesWords || undefined,
-        },
         decisions: decisions.filter(d => d.trim()),
-        nextMeetingDate: nextMeetingDate || undefined,
         nextMeetingGoal: nextMeetingGoal.trim(),
         midtermMilestones,
         finalMilestones,
@@ -172,7 +159,32 @@ export default function NewMinute() {
         status,
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
-      });
+      };
+
+      // オプショナルなフィールドは値がある場合のみ追加
+      if (midtermDate) {
+        minuteData.midtermDate = midtermDate;
+        minuteData.daysToMidterm = calcDaysTo(midtermDate);
+      }
+      if (finalDate) {
+        minuteData.finalDate = finalDate;
+        minuteData.daysToFinal = calcDaysTo(finalDate);
+      }
+      if (nextMeetingDate) {
+        minuteData.nextMeetingDate = nextMeetingDate;
+      }
+
+      // nextDeliverablesは値があるフィールドのみ含める
+      const nextDeliverables: any = {};
+      if (nextDeliverablesFigures) nextDeliverables.figures = nextDeliverablesFigures;
+      if (nextDeliverablesTables) nextDeliverables.tables = nextDeliverablesTables;
+      if (nextDeliverablesSlides) nextDeliverables.slides = nextDeliverablesSlides;
+      if (nextDeliverablesWords) nextDeliverables.words = nextDeliverablesWords;
+      if (Object.keys(nextDeliverables).length > 0) {
+        minuteData.nextDeliverables = nextDeliverables;
+      }
+
+      await minuteRepository.create(minuteData);
 
       router.push('/dashboard');
     } catch (err) {
