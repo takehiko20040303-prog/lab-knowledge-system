@@ -4,8 +4,11 @@ import { useAuth } from '@/components/auth/AuthProvider';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { AIProcessedMinute, TodoItem, MilestoneItem, AttachedFile } from '@/types';
-import { db } from '@/lib/firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { minuteRepository } from '@/lib/repositories/minuteRepository';
+import { calcDaysTo } from '@/lib/utils/dateUtils';
+import { ErrorBanner } from '@/components/common/ErrorBanner';
+import { SuccessBanner } from '@/components/common/SuccessBanner';
+import { Timestamp } from 'firebase/firestore';
 import FileUploader from '@/components/files/FileUploader';
 
 // デフォルトのマイルストーン
@@ -122,6 +125,9 @@ export default function NewMinute() {
     }
   };
 
+  /**
+   * Save minute to Firestore using repository pattern
+   */
   const handleSave = async (status: 'draft' | 'confirmed') => {
     if (!user) return;
 
@@ -133,47 +139,39 @@ export default function NewMinute() {
     setSaving(true);
     setError('');
 
-    // 発表までの日数を計算
-    const today = new Date();
-    const calcDaysTo = (targetDate: string) => {
-      if (!targetDate) return null;
-      const target = new Date(targetDate);
-      return Math.ceil((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    };
-
     try {
-      await addDoc(collection(db, 'minutes'), {
+      await minuteRepository.create({
         userId: user.uid,
-        inputMode: 'manual',
+        inputMode: 'manual' as const,
         date,
-        participants: participants.length > 0 ? participants : null,
-        midtermDate: midtermDate || null,
-        finalDate: finalDate || null,
-        daysToMidterm: calcDaysTo(midtermDate),
-        daysToFinal: calcDaysTo(finalDate),
-        meetingsToMidterm: null,
-        meetingsToFinal: null,
+        participants: participants.length > 0 ? participants : [],
+        midtermDate: midtermDate || undefined,
+        finalDate: finalDate || undefined,
+        daysToMidterm: midtermDate ? calcDaysTo(midtermDate) : undefined,
+        daysToFinal: finalDate ? calcDaysTo(finalDate) : undefined,
+        meetingsToMidterm: undefined,
+        meetingsToFinal: undefined,
         todayGoal: todayGoal.trim(),
-        lastWeekActions: lastWeekActions.filter(a => a.trim()).length > 0 ? lastWeekActions.filter(a => a.trim()) : null,
-        problems: problems.trim() || null,
-        todos: todos.filter(t => t.task.trim()).length > 0 ? todos.filter(t => t.task.trim()) : null,
-        weeklySchedule: null,
-        nextDeliverables: (nextDeliverablesFigures || nextDeliverablesTables || nextDeliverablesSlides || nextDeliverablesWords) ? {
-          figures: nextDeliverablesFigures || null,
-          tables: nextDeliverablesTables || null,
-          slides: nextDeliverablesSlides || null,
-          words: nextDeliverablesWords || null,
-        } : null,
-        decisions: decisions.filter(d => d.trim()).length > 0 ? decisions.filter(d => d.trim()) : null,
-        nextMeetingDate: nextMeetingDate || null,
-        nextMeetingGoal: nextMeetingGoal.trim() || null,
-        midtermMilestones: midtermMilestones || null,
-        finalMilestones: finalMilestones || null,
-        attachedFiles: attachedFiles.length > 0 ? attachedFiles : null,
-        tags: tags.length > 0 ? tags : null,
+        lastWeekActions: lastWeekActions.filter(a => a.trim()),
+        problems: problems.trim(),
+        todos: todos.filter(t => t.task.trim()),
+        weeklySchedule: undefined,
+        nextDeliverables: {
+          figures: nextDeliverablesFigures || undefined,
+          tables: nextDeliverablesTables || undefined,
+          slides: nextDeliverablesSlides || undefined,
+          words: nextDeliverablesWords || undefined,
+        },
+        decisions: decisions.filter(d => d.trim()),
+        nextMeetingDate: nextMeetingDate || undefined,
+        nextMeetingGoal: nextMeetingGoal.trim(),
+        midtermMilestones,
+        finalMilestones,
+        attachedFiles,
+        tags,
         status,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
       });
 
       router.push('/dashboard');

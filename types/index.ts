@@ -16,11 +16,11 @@ export interface AttachedFile {
   fileName: string;
   fileType: string; // 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'txt' | 'image'
   fileSize: number; // bytes
-  fileUrl: string; // Firebase Storage URL
-  storagePath: string; // Storage内のパス
+  fileUrl: string; // Base64 encoded data or Firebase Storage URL
+  storagePath?: string; // Storage内のパス (optional for Base64)
   uploadedBy: string; // userId
   uploadedAt: Timestamp;
-  description?: string | null; // ファイルの説明
+  description?: string; // ファイルの説明
 }
 
 // ToDo項目の詳細型
@@ -58,7 +58,7 @@ export interface Minute {
 
   // 基本情報
   date: string; // YYYY-MM-DD形式
-  participants: string[]; // 参加者
+  participants: string[]; // 参加者 (default: [])
 
   // 発表までの日数
   midtermDate?: string; // 中間発表日（YYYY-MM-DD）
@@ -72,13 +72,13 @@ export interface Minute {
   todayGoal: string; // 1行
 
   // Check（先週やったこと）
-  lastWeekActions: string[]; // 最大3つ
+  lastWeekActions: string[]; // 最大3つ (default: [])
 
   // Problem（困ってること）
   problems: string; // 自由記述
 
   // Plan（次回までの予定）
-  todos: TodoItem[]; // 詳細ToDoリスト
+  todos: TodoItem[]; // 詳細ToDoリスト (default: [])
   weeklySchedule?: WeeklySchedule; // 今週のスケジュール
 
   // Do（次回持っていくもの）
@@ -90,21 +90,21 @@ export interface Minute {
   };
 
   // Decision（決まったこと）
-  decisions: string[]; // 箇条書き
+  decisions: string[]; // 箇条書き (default: [])
 
   // 次回
   nextMeetingDate?: string; // YYYY-MM-DD HH:MM
   nextMeetingGoal: string; // 次回のゴール
 
   // マイルストーン
-  midtermMilestones: MilestoneItem[]; // 中間発表までの階段
-  finalMilestones: MilestoneItem[]; // 最終発表までの階段
+  midtermMilestones: MilestoneItem[]; // 中間発表までの階段 (default: [])
+  finalMilestones: MilestoneItem[]; // 最終発表までの階段 (default: [])
 
   // 添付ファイル
-  attachedFiles?: AttachedFile[]; // 関連ファイル（Word/PDF/Excel等）
+  attachedFiles: AttachedFile[]; // 関連ファイル（Word/PDF/Excel等） (default: [])
 
   // メタ情報
-  tags: string[];
+  tags: string[]; // タグ (default: [])
   status: 'draft' | 'confirmed';
   createdAt: Timestamp;
   updatedAt: Timestamp;

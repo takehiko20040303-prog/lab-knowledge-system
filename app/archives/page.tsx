@@ -2,21 +2,23 @@
 
 import { useAuth } from '@/components/auth/AuthProvider';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { Minute, AttachedFile } from '@/types';
-import { db } from '@/lib/firebase';
-import { collection, query, where, orderBy, getDocs, doc, deleteDoc } from 'firebase/firestore';
+import { useMinutes } from '@/lib/hooks/useMinutes';
+import { getFiscalYear } from '@/lib/utils/dateUtils';
+import { ErrorBanner } from '@/components/common/ErrorBanner';
+import { SuccessBanner } from '@/components/common/SuccessBanner';
 import VideoPlayer from '@/components/files/VideoPlayer';
 
 export default function ArchivesPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
-  const [minutes, setMinutes] = useState<Minute[]>([]);
-  const [loadingData, setLoadingData] = useState(true);
+  const { minutes, loading: loadingData, error, deleteMinute: deleteMinuteHook } = useMinutes(user?.uid || null);
   const [fileTypeFilter, setFileTypeFilter] = useState<'all' | 'video' | 'pdf' | 'docx' | 'xlsx' | 'image'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedYear, setSelectedYear] = useState<string>('all');
   const [groupByYear, setGroupByYear] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
 
   useEffect(() => {
     if (!loading && !user) {
@@ -24,104 +26,93 @@ export default function ArchivesPage() {
     }
   }, [user, loading, router]);
 
-  useEffect(() => {
-    if (user) {
-      fetchArchives();
-    }
-  }, [user]);
-
-  const fetchArchives = async () => {
-    if (!user) return;
-
-    setLoadingData(true);
-    try {
-      const q = query(
-        collection(db, 'minutes'),
-        where('userId', '==', user.uid),
-        orderBy('createdAt', 'desc')
-      );
-
-      const snapshot = await getDocs(q);
-      const minutesData = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as Minute[];
-
-      // 添付ファイルがある議事録のみ
-      const withFiles = minutesData.filter(m => m.attachedFiles && m.attachedFiles.length > 0);
-      setMinutes(withFiles);
-    } catch (error) {
-      console.error('アーカイブの取得に失敗:', error);
-    } finally {
-      setLoadingData(false);
-    }
-  };
-
+  /**
+   * Delete a minute with confirmation
+   */
   const handleDeleteMinute = async (minuteId: string, minuteGoal: string) => {
     if (!window.confirm(`「${minuteGoal}」を削除しますか？\n\nこの操作は取り消せません。`)) {
       return;
     }
 
     try {
-      await deleteDoc(doc(db, 'minutes', minuteId));
-      alert('削除しました');
-      fetchArchives(); // 再読み込み
+      await deleteMinuteHook(minuteId);
+      setSuccessMessage('削除しました');
+      setTimeout(() => setSuccessMessage(''), 3000);
     } catch (error) {
       console.error('削除エラー:', error);
-      alert('削除に失敗しました');
     }
   };
 
-  // すべてのファイルを取得
-  const allFiles = minutes.flatMap(m =>
-    (m.attachedFiles || []).map(file => ({
-      ...file,
-      minuteId: m.id,
-      minuteDate: m.date,
-      minuteGoal: m.todayGoal,
-    }))
-  );
+  /**
+   * Memoized: Extract all files from minutes with file attachments
+   */
+  const allFiles = useMemo(() => {
+    return minutes
+      .filter(m => m.attachedFiles && m.attachedFiles.length > 0)
+      .flatMap(m =>
+        (m.attachedFiles || []).map(file => ({
+          ...file,
+          minuteId: m.id,
+          minuteDate: m.date,
+          minuteGoal: m.todayGoal,
+        }))
+      );
+  }, [minutes]);
 
-  // 年度の取得（日付から年度を計算: 4月始まり）
-  const getAcademicYear = (dateString: string): number => {
-    const date = new Date(dateString);
-    const year = date.getFullYear();
-    const month = date.getMonth() + 1; // 0-indexed to 1-indexed
-    // 4月以降なら現在年度、3月以前なら前年度
-    return month >= 4 ? year : year - 1;
-  };
+  /**
+   * Memoized: Extract all unique fiscal years from files
+   */
+  const allYears = useMemo(() => {
+    return Array.from(
+      new Set(allFiles.map(f => getFiscalYear(f.minuteDate)))
+    ).sort((a, b) => b - a); // 降順
+  }, [allFiles]);
 
-  // すべての年度を取得
-  const allYears = Array.from(
-    new Set(allFiles.map(f => getAcademicYear(f.minuteDate)))
-  ).sort((a, b) => b - a); // 降順
+  /**
+   * Memoized: Filter files based on year, type, and search query
+   */
+  const filteredFiles = useMemo(() => {
+    let filtered = allFiles;
 
-  // フィルタリング
-  let filteredFiles = allFiles;
+    // 年度フィルター
+    if (selectedYear !== 'all') {
+      const yearNum = parseInt(selectedYear);
+      filtered = filtered.filter(f => getFiscalYear(f.minuteDate) === yearNum);
+    }
 
-  // 年度フィルター
-  if (selectedYear !== 'all') {
-    const yearNum = parseInt(selectedYear);
-    filteredFiles = filteredFiles.filter(f => getAcademicYear(f.minuteDate) === yearNum);
-  }
+    // ファイルタイプフィルター
+    if (fileTypeFilter !== 'all') {
+      filtered = filtered.filter(f => f.fileType === fileTypeFilter);
+    }
 
-  if (fileTypeFilter !== 'all') {
-    filteredFiles = filteredFiles.filter(f => f.fileType === fileTypeFilter);
-  }
+    // 検索クエリフィルター
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      filtered = filtered.filter(f =>
+        f.fileName.toLowerCase().includes(query) ||
+        f.description?.toLowerCase().includes(query) ||
+        f.minuteGoal?.toLowerCase().includes(query)
+      );
+    }
 
-  if (searchQuery.trim()) {
-    const query = searchQuery.toLowerCase();
-    filteredFiles = filteredFiles.filter(f =>
-      f.fileName.toLowerCase().includes(query) ||
-      f.description?.toLowerCase().includes(query) ||
-      f.minuteGoal?.toLowerCase().includes(query)
-    );
-  }
+    return filtered;
+  }, [allFiles, selectedYear, fileTypeFilter, searchQuery]);
 
-  // ファイルタイプ別の件数
-  const videosCount = allFiles.filter(f => f.fileType === 'video').length;
-  const docsCount = allFiles.filter(f => f.fileType === 'pdf' || f.fileType === 'docx' || f.fileType === 'xlsx' || f.fileType === 'pptx').length;
-  const imagesCount = allFiles.filter(f => f.fileType === 'image').length;
+  /**
+   * Memoized: File type counts
+   */
+  const { videosCount, docsCount, imagesCount } = useMemo(() => {
+    return {
+      videosCount: allFiles.filter(f => f.fileType === 'video').length,
+      docsCount: allFiles.filter(f =>
+        f.fileType === 'pdf' ||
+        f.fileType === 'docx' ||
+        f.fileType === 'xlsx' ||
+        f.fileType === 'pptx'
+      ).length,
+      imagesCount: allFiles.filter(f => f.fileType === 'image').length,
+    };
+  }, [allFiles]);
 
   if (loading || loadingData) {
     return (
@@ -134,6 +125,10 @@ export default function ArchivesPage() {
   return (
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="max-w-7xl mx-auto px-4">
+        {/* Error and Success Banners */}
+        <ErrorBanner message={error || ''} onDismiss={() => {}} />
+        <SuccessBanner message={successMessage} onDismiss={() => setSuccessMessage('')} />
+
         {/* ヘッダー */}
         <div className="flex justify-between items-center mb-6">
           <div>
@@ -181,7 +176,7 @@ export default function ArchivesPage() {
               >
                 <option value="all">すべての年度 ({allFiles.length}件)</option>
                 {allYears.map(year => {
-                  const yearFiles = allFiles.filter(f => getAcademicYear(f.minuteDate) === year);
+                  const yearFiles = allFiles.filter(f => getFiscalYear(f.minuteDate) === year);
                   return (
                     <option key={year} value={year}>
                       {year}年度 ({yearFiles.length}件)
@@ -251,9 +246,9 @@ export default function ArchivesPage() {
           // 年度別グループ化表示
           <div className="space-y-8">
             {allYears
-              .filter(year => filteredFiles.some(f => getAcademicYear(f.minuteDate) === year))
+              .filter(year => filteredFiles.some(f => getFiscalYear(f.minuteDate) === year))
               .map(year => {
-                const yearFiles = filteredFiles.filter(f => getAcademicYear(f.minuteDate) === year);
+                const yearFiles = filteredFiles.filter(f => getFiscalYear(f.minuteDate) === year);
                 return (
                   <div key={year} className="bg-white rounded-lg shadow p-6">
                     <h2 className="text-2xl font-bold text-gray-900 mb-4 border-b pb-3">
